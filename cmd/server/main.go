@@ -42,6 +42,7 @@ func main() {
 	// ─── Setup HTTP Handlers ─────────────────────────────────────────
 	runHandler := handler.NewRunHandler(pool, sessionMgr)
 	wsHandler := handler.NewWSHandler(sessionMgr)
+	githubHandler := handler.NewGitHubHandler()
 
 
 	mux := http.NewServeMux()
@@ -52,6 +53,11 @@ func main() {
 	// GET /ws?session_id=xxx - Stream build output via WebSocket
 	mux.HandleFunc("/ws", wsHandler.Handle)
 
+	// GitHub proxy endpoints (bypass CORS for Device Flow)
+	mux.HandleFunc("/github/device-code", githubHandler.HandleDeviceCode)
+	mux.HandleFunc("/github/access-token", githubHandler.HandleAccessToken)
+	mux.HandleFunc("/github/repos", githubHandler.HandleUserRepos)
+	mux.HandleFunc("/github/api/", githubHandler.HandleProxy)
 
 
 	// GET /health - Health check endpoint
