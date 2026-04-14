@@ -16,12 +16,15 @@ func CORS(next http.Handler) http.Handler {
 		// Allow headers, including Authorization for SSO
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Session-ID, Authorization, X-Requested-With, Origin")
 
-		// Cache preflight response for 12 hours
-		w.Header().Set("Access-Control-Max-Age", "43200")
+		// Ensure Vary: Origin is set so browsers cache responses correctly per-origin
+		w.Header().Set("Vary", "Origin")
+
+		// Disable caching of preflight response to ensure changes take effect immediately
+		w.Header().Set("Access-Control-Max-Age", "0")
 
 		// Handle preflight OPTIONS requests
 		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 

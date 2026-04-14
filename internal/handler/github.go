@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log"
@@ -146,31 +147,40 @@ func (h *GitHubHandler) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		apiURL += "?" + r.URL.RawQuery
 	}
 
-	body, _ := io.ReadAll(r.Body)
+	// Read the original request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error":"failed to read request body"}`, http.StatusBadRequest)
+		return
+	}
 	defer r.Body.Close()
 
 	var bodyReader io.Reader
 	if len(body) > 0 {
-		bodyReader = strings.NewReader(string(body))
+		bodyReader = bytes.NewReader(body)
 	}
 
 	req, err := http.NewRequest(r.Method, apiURL, bodyReader)
 	if err != nil {
-		http.Error(w, `{"error":"failed to create request"}`, http.StatusInternalServerError)
+		log.Printf("[GitHub Proxy] Request creation failed: %v", err)
+		http.Error(w, `{"error":"failed to create github request"}`, http.StatusInternalServerError)
 		return
 	}
 
-	// Forward auth header
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		req.Header.Set("Authorization", auth)
-	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "Soroban-Studio-Backend") // Required by GitHub API
-
-	if len(body) > 0 {
-		req.Header.Set("Content-Type", "application/json")
+	// Forward client headers
+	for k, v := range r.Header {
+		if k == "Authorization" || k == "Content-Type" || k == "Accept" {
+			req.Header.Set(k, v[0])
+		}
 	}
 
+	// Ensure required headers are set
+	if req.Header.Get("Accept") == "" {
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+	}
+	req.Header.Set("User-Agent", "Soroban-Studio-Backend")
+
+	// Execute request to GitHub
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("[GitHub Proxy] API request to %s failed: %v", apiURL, err)
@@ -181,14 +191,16 @@ func (h *GitHubHandler) HandleProxy(w http.ResponseWriter, r *http.Request) {
 
 	respBody, _ := io.ReadAll(resp.Body)
 
+	// Log detailed error from GitHub
 	if resp.StatusCode >= 400 {
 		log.Printf("[GitHub Proxy] GitHub returned error %d for %s: %s", resp.StatusCode, apiURL, string(respBody))
 	}
 
-	// Try to parse as JSON; if so, return as JSON
-	var js json.RawMessage
-	if json.Unmarshal(respBody, &js) == nil {
-		w.Header().Set("Content-Type", "application/json")
+	// Forward response headers back to client
+	for k, v := range resp.Header {
+		if k != "Content-Length" && k != "Connection" && k != "Server" {
+			w.Header().Set(k, v[0])
+		}
 	}
 
 	w.WriteHeader(resp.StatusCode)
