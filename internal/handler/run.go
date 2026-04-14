@@ -233,33 +233,59 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Try to get from cookie first, otherwise create a persistent one
 	sessionID := h.getOrCreateSessionID(w, r)
 
-	// Create workspace directory structure and write files
-	workDir := filepath.Join(h.workspaceDir, sessionID)
-
-	// Clear existing workspace if it exists, but preserve .config (identities)
-	if entries, err := os.ReadDir(workDir); err == nil {
-		log.Printf("[handler] selectively clearing workspace: %s", workDir)
-		for _, entry := range entries {
-			// Preserve .config (identities) and target (build cache)
-			if entry.Name() == ".config" || entry.Name() == "target" {
-				continue // Preserve identities and build artifacts
-			}
-			os.RemoveAll(filepath.Join(workDir, entry.Name()))
-		}
-	}
-
-	// Create workspace directory if it doesn't exist
-	if err := os.MkdirAll(workDir, 0755); err != nil {
-		log.Printf("[handler] failed to create workspace directory %s: %v", workDir, err)
+	// Prepare session workspace directory (create if doesn't exist)
+	sessionBaseDir := filepath.Join(h.workspaceDir, sessionID)
+	if err := os.MkdirAll(sessionBaseDir, 0755); err != nil {
+		log.Printf("[handler] failed to create session directory %s: %v", sessionBaseDir, err)
 		http.Error(w, `{"error":"failed to create workspace"}`, http.StatusInternalServerError)
 		return
 	}
 
+	// Calculate absolute WorkDir for the job based on Terminal CWD
+	// Terminal CWD looks like "~/project[/subfolder]"
+	relPath := strings.TrimPrefix(req.Cwd, "~/project")
+	relPath = strings.TrimPrefix(relPath, "/")
+	jobWorkDir := filepath.Join(sessionBaseDir, relPath)
+
+	// Ensure the command's execution directory exists
+	if err := os.MkdirAll(jobWorkDir, 0755); err != nil {
+		log.Printf("[handler] failed to create job workdir %s: %v", jobWorkDir, err)
+		http.Error(w, `{"error":"failed to prepare task directory"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Smart Workdir Detection: If we are in the root and there's no Cargo.toml, 
+	// but there's a unique subdirectory with a Cargo.toml (like after 'init hello-world'),
+	// automatically use that subdirectory as the execution context.
+	if _, err := os.Stat(filepath.Join(jobWorkDir, "Cargo.toml")); os.IsNotExist(err) {
+		entries, err := os.ReadDir(jobWorkDir)
+		if err == nil {
+			var subDirs []string
+			for _, entry := range entries {
+				if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+					subDirs = append(subDirs, entry.Name())
+				}
+			}
+			// If exactly one project folder exists, dive into it
+			if len(subDirs) == 1 {
+				potentialDir := filepath.Join(jobWorkDir, subDirs[0])
+				if _, err := os.Stat(filepath.Join(potentialDir, "Cargo.toml")); err == nil {
+					log.Printf("[handler] smart workdir: diving into %s", subDirs[0])
+					jobWorkDir = potentialDir
+				}
+			}
+		}
+	}
+
+	// We NO LONGER clear the workspace. With persistent volumes, we only
+	// add or update the files explicitly provided by the frontend.
+	// This allows lazy loading to work: the backend keeps whatever is on disk.
+
 	// Write files (overwrite existing ones)
 	for filename, content := range req.Files {
-		filePath := filepath.Join(workDir, filename)
+		filePath := filepath.Join(sessionBaseDir, filename)
 		dir := filepath.Dir(filePath)
-
+// ... same as before
 		// Create parent directories (e.g., src/)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			log.Printf("[handler] failed to create directory %s: %v", dir, err)
@@ -275,22 +301,32 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Printf("[handler] workspace created: session=%s, files=%d, command=%q", sessionID, len(req.Files), command)
+	log.Printf("[handler] workspace ready: session=%s, workdir=%s, files=%d, command=%q", sessionID, jobWorkDir, len(req.Files), command)
 
-	// Ensure session exists for WebSocket tracking
+	// Ensure session exists for WebSocket tracking.
+	// Note: We do NOT clear the buffer here. With jobId-based filtering,
+	// each WebSocket listener only processes messages from its own job.
+	// Clearing the buffer risks wiping undelivered messages (like fileTreeUpdate).
 	h.sessionMgr.GetOrCreate(sessionID)
+
+	// Generate a unique JobID for this execution.
+	// The frontend uses this to filter WebSocket messages and only display
+	// output belonging to the command it triggered (prevents init/build mixing).
+	jobID := uuid.New().String()
 
 	// Enqueue the job with the user's command
 	h.pool.Enqueue(model.Job{
 		SessionID: sessionID,
-		WorkDir:   workDir,
+		JobID:     jobID,
+		WorkDir:   jobWorkDir,
 		Command:   command,
 	})
 
-	// Return the session ID to the client
+	// Return the session ID and job ID to the client
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(model.RunResponse{
 		SessionID: sessionID,
+		JobID:     jobID,
 	})
 }

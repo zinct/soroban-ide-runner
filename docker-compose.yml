@@ -25,14 +25,14 @@ services:
       - workspace:/app/workspaces
     environment:
       - PORT=8080
-      - MAX_WORKERS=3
+      - MAX_WORKERS=2
       - RUNNER_CONTAINER=soroban-runner
       - WORKSPACE_DIR=/app/workspaces
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 512M
+          cpus: "0.50"
+          memory: 1G
     depends_on:
       soroban-runner:
         condition: service_started
@@ -47,24 +47,24 @@ services:
     volumes:
       # Same shared workspace volume
       - workspace:/app/workspaces
+      # Global target cache for snappier builds across sessions
+      - target_cache:/app/target
       # Global sccache volume
       - sccache:/app/sccache
       # Global cargo home volume
       - cargo_home:/app/cargo
-      # Global shared target volume
-      - target_cache:/app/target
     # Keep container alive to receive `docker exec` commands
     command: ["sh", "-c", "sccache --start-server && tail -f /dev/null"]
     deploy:
       resources:
         limits:
-          cpus: '1.50'
-          memory: 2G
+          cpus: "4.0"
+          memory: 4G
     restart: unless-stopped
 
 # Shared named volumes
 volumes:
   workspace:
+  target_cache:
   sccache:
   cargo_home:
-  target_cache:

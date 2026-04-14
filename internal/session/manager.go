@@ -11,11 +11,12 @@ import (
 )
 
 // Session represents an active compilation session.
-// It holds WebSocket connections and a message buffer for late-connecting clients.
+// It holds WebSocket connections and message buffers grouped by JobID.
 type Session struct {
-	mu     sync.Mutex
-	conns  []*websocket.Conn
-	buffer []model.OutputMessage
+	mu         sync.Mutex
+	conns      []*websocket.Conn
+	// Map: JobID -> []Messages
+	jobBuffers map[string][]model.OutputMessage
 }
 
 // Manager handles session lifecycle and WebSocket connections.
@@ -30,11 +31,10 @@ func NewManager() *Manager {
 }
 
 // GetOrCreate retrieves an existing session or creates a new one if it doesn't exist.
-// This is non-destructive: it won't overwrite existing connections or buffers.
 func (m *Manager) GetOrCreate(sessionID string) *Session {
 	actual, _ := m.sessions.LoadOrStore(sessionID, &Session{
-		conns:  make([]*websocket.Conn, 0),
-		buffer: make([]model.OutputMessage, 0),
+		conns:      make([]*websocket.Conn, 0),
+		jobBuffers: make(map[string][]model.OutputMessage),
 	})
 	s := actual.(*Session)
 	log.Printf("[session] retrieved/created: %s", sessionID)
@@ -42,34 +42,48 @@ func (m *Manager) GetOrCreate(sessionID string) *Session {
 }
 
 // AddConnection registers a WebSocket connection for a session.
-// Any buffered messages (from before the client connected) are flushed immediately.
+// If a jobID is provided, any buffered messages for that specific job
+// are flushed immediately to the new connection.
 // Returns false if the session does not exist.
-func (m *Manager) AddConnection(sessionID string, conn *websocket.Conn) bool {
+func (m *Manager) AddConnection(sessionID string, jobID string, conn *websocket.Conn) bool {
 	val, ok := m.sessions.Load(sessionID)
 	if !ok {
 		return false
 	}
 
 	s := val.(*Session)
+	
+	// We lock for the entire duration of history flushing and appending.
+	// This is CRITICAL because gorilla/websocket does not support concurrent writes
+	// to the same connection. By holding the session lock, we ensure that:
+	// 1. Send() cannot broadcast to any connection until this flush is complete.
+	// 2. This new connection is only added to the list AFTER its history is flushed.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Flush buffered messages to the newly connected client
-	for _, msg := range s.buffer {
-		data, _ := json.Marshal(msg)
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			log.Printf("[session] failed to flush buffer to new connection: %v", err)
-			return false
+	if s.jobBuffers == nil {
+		s.jobBuffers = make(map[string][]model.OutputMessage)
+	}
+
+	// Flush history for the requested job
+	if jobID != "" {
+		if buffer, exists := s.jobBuffers[jobID]; exists {
+			for _, msg := range buffer {
+				data, _ := json.Marshal(msg)
+				if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+					log.Printf("[session] failed to flush job %s buffer: %v", jobID, err)
+					return true // Connection is not added, but return true to keep WS handler alive
+				}
+			}
 		}
 	}
 
 	s.conns = append(s.conns, conn)
-	log.Printf("[session] connection added: session=%s, total_conns=%d", sessionID, len(s.conns))
+	log.Printf("[session] connection added: session=%s, job=%s, total_conns=%d", sessionID, jobID, len(s.conns))
 	return true
 }
 
 // RemoveConnection removes a specific WebSocket connection from a session.
-// Called when a client disconnects.
 func (m *Manager) RemoveConnection(sessionID string, conn *websocket.Conn) {
 	val, ok := m.sessions.Load(sessionID)
 	if !ok {
@@ -90,8 +104,6 @@ func (m *Manager) RemoveConnection(sessionID string, conn *websocket.Conn) {
 }
 
 // Send broadcasts a message to all connected WebSocket clients for a session.
-// Messages are also buffered for clients that connect later.
-// Dead connections are automatically cleaned up.
 func (m *Manager) Send(sessionID string, msg model.OutputMessage) {
 	val, ok := m.sessions.Load(sessionID)
 	if !ok {
@@ -99,19 +111,27 @@ func (m *Manager) Send(sessionID string, msg model.OutputMessage) {
 	}
 
 	s := val.(*Session)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
+	// Marshall data once
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("[session] failed to marshal message: %v", err)
 		return
 	}
 
-	// Always buffer for late-connecting clients
-	s.buffer = append(s.buffer, msg)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	// Broadcast to all active connections, removing dead ones
+	if s.jobBuffers == nil {
+		s.jobBuffers = make(map[string][]model.OutputMessage)
+	}
+
+	// Buffer the message
+	if msg.JobID != "" {
+		s.jobBuffers[msg.JobID] = append(s.jobBuffers[msg.JobID], msg)
+	}
+
+	// Broadcast to all active connections
 	activeConns := make([]*websocket.Conn, 0, len(s.conns))
 	for _, conn := range s.conns {
 		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
@@ -139,4 +159,19 @@ func (m *Manager) Remove(sessionID string) {
 		conn.Close()
 	}
 	log.Printf("[session] removed: %s", sessionID)
+}
+
+// ClearBuffer removes all buffered messages from the session's history.
+func (m *Manager) ClearBuffer(sessionID string) {
+	val, ok := m.sessions.Load(sessionID)
+	if !ok {
+		return
+	}
+
+	s := val.(*Session)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.jobBuffers = make(map[string][]model.OutputMessage)
+	log.Printf("[session] all job buffers cleared: %s", sessionID)
 }

@@ -2,7 +2,6 @@ package executor
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -10,10 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"soroban-studio-backend/internal/model"
 	"soroban-studio-backend/internal/session"
 )
+
 
 
 
@@ -23,7 +24,6 @@ type Executor struct {
 	sessionMgr    *session.Manager
 	containerName string
 	workspaceDir  string
-	mu            sync.Mutex // Protects the fixed /app/project path
 }
 
 // New creates a new Executor with configuration from environment variables.
@@ -54,7 +54,7 @@ func (e *Executor) Execute(job model.Job) {
 		command = "stellar contract build"
 	}
 
-	log.Printf("[executor] executing command for session %s: %q", job.SessionID, command)
+	log.Printf("[executor] executing command for session %s (job %s): %q", job.SessionID, job.JobID, command)
 
 	// Parse the command into individual arguments (safe — no shell involved)
 	cmdArgs := strings.Fields(command)
@@ -62,26 +62,23 @@ func (e *Executor) Execute(job model.Job) {
 
 	workDir := fmt.Sprintf("/app/workspaces/%s", job.SessionID)
 
-	// To achieve sub-second speeds across different sessions, we must use a CONSTANT path
-	// inside the runner (e.g., /app/project) because Cargo's incremental state is path-absolute.
-	// We create a symlink to the session's workspace, then run the command inside that symlink.
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// 1. Point the fixed /app/project path to our session's workspace
-	linkCmd := exec.Command("docker", "exec", e.containerName, "ln", "-sfn", workDir, "/app/project")
-	if err := linkCmd.Run(); err != nil {
-		log.Printf("[executor] warning: failed to create session symlink: %v", err)
-	}
-
-	// 2. Build the docker exec argument list for the actual command
-	// We use /app/project as the workdir and HOME to ensure absolute paths are constant.
-	fixedProjectDir := "/app/project"
-	homeEnv := fmt.Sprintf("HOME=%s", fixedProjectDir)
+	// Build the docker exec argument list.
+	// Each session runs in its own workspace — no shared symlinks, no race conditions.
+	// Caching still works because:
+	//   - CARGO_TARGET_DIR=/app/target (global, set in Dockerfile)
+	//   - sccache caches compiled crates globally
+	homeEnv := fmt.Sprintf("HOME=%s", workDir)
+	targetEnv := "CARGO_TARGET_DIR=/app/target"
+	
+	// Explicitly pass cache-related env vars to ensure sccache is active
 	dockerArgs := []string{
 		"exec",
-		"--workdir", fixedProjectDir,
+		"--workdir", workDir,
 		"--env", homeEnv,
+		"--env", targetEnv,
+		"--env", "RUSTC_WRAPPER=sccache",
+		"--env", "SCCACHE_DIR=/app/sccache",
+		"--env", "CARGO_HOME=/app/cargo",
 		e.containerName,
 	}
 	dockerArgs = append(dockerArgs, cmdArgs...)
@@ -93,19 +90,19 @@ func (e *Executor) Execute(job model.Job) {
 	// Create pipes for real-time output streaming
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		e.sendError(job.SessionID, fmt.Sprintf("Failed to create stdout pipe: %v", err))
+		e.sendError(job.SessionID, job.JobID, fmt.Sprintf("Failed to create stdout pipe: %v", err))
 		return
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		e.sendError(job.SessionID, fmt.Sprintf("Failed to create stderr pipe: %v", err))
+		e.sendError(job.SessionID, job.JobID, fmt.Sprintf("Failed to create stderr pipe: %v", err))
 		return
 	}
 
 	// Start the process (non-blocking)
 	if err := cmd.Start(); err != nil {
-		e.sendError(job.SessionID, fmt.Sprintf("Failed to start command: %v", err))
+		e.sendError(job.SessionID, job.JobID, fmt.Sprintf("Failed to start command: %v", err))
 		return
 	}
 
@@ -122,6 +119,7 @@ func (e *Executor) Execute(job model.Job) {
 			e.sessionMgr.Send(job.SessionID, model.OutputMessage{
 				Type:    "stdout",
 				Content: scanner.Text(),
+				JobID:   job.JobID,
 			})
 		}
 	}()
@@ -135,6 +133,7 @@ func (e *Executor) Execute(job model.Job) {
 			e.sessionMgr.Send(job.SessionID, model.OutputMessage{
 				Type:    "stderr",
 				Content: scanner.Text(),
+				JobID:   job.JobID,
 			})
 		}
 	}()
@@ -147,34 +146,45 @@ func (e *Executor) Execute(job model.Job) {
 		e.sessionMgr.Send(job.SessionID, model.OutputMessage{
 			Type:    "error",
 			Content: fmt.Sprintf("Command failed: %v", err),
+			JobID:   job.JobID,
 		})
 	}
 
 	// NOTE: Workspace is NOT cleaned up here.
 	// It persists so the user can run more commands.
 
-	// POST-COMMAND HOOKS:
-	// If it was an 'init' command and it succeeded, send a file tree update
-	// MUST be sent before the 'done' signal to ensure frontend receives it
-	if strings.Contains(command, "contract init") && cmd.ProcessState != nil && cmd.ProcessState.Success() {
-		log.Printf("[executor] 'stellar contract init' detected, scanning workspace for session %s", job.SessionID)
-		tree, err := e.scanDirectory(workDir)
-		if err == nil {
-			treeJSON, _ := json.Marshal(tree)
-			e.sessionMgr.Send(job.SessionID, model.OutputMessage{
-				Type:    "fileTreeUpdate",
-				Content: string(treeJSON),
-			})
-		} else {
-			log.Printf("[executor] failed to scan workspace after init: %v", err)
-		}
-	}
+		// POST-COMMAND HOOKS:
+		// [DEPRECATED] Backend-to-Frontend sync is disabled as per user architecture.
+		// The frontend is now the sole source of truth.
+		log.Printf("[executor] command succeeded for session %s (job %s)", job.SessionID, job.JobID)
 
 	// Signal that execution is complete
 	e.sessionMgr.Send(job.SessionID, model.OutputMessage{
 		Type:    "done",
 		Content: "",
+		JobID:   job.JobID,
 	})
+}
+
+// scanDirectoryWithRetry attempts to scan a directory multiple times if it appears empty.
+// This helps mitigate Docker volume synchronization delays between containers.
+func (e *Executor) scanDirectoryWithRetry(dirPath string, retries int) ([]model.FileTreeNode, error) {
+	for i := 0; i <= retries; i++ {
+		tree, err := e.scanDirectory(dirPath)
+		// If we found files, or if there was a real error (not just empty), return
+		if err == nil && len(tree) > 0 {
+			return tree, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		if i < retries {
+			log.Printf("[executor] scan result empty for %s, retrying (%d/%d)...", dirPath, i+1, retries)
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+	return e.scanDirectory(dirPath)
 }
 
 // scanDirectory recursively walks a directory and returns a tree of FileTreeNodes.
@@ -218,14 +228,16 @@ func (e *Executor) scanDirectory(dirPath string) ([]model.FileTreeNode, error) {
 }
 
 // sendError sends an error message followed by a done signal.
-func (e *Executor) sendError(sessionID, msg string) {
+func (e *Executor) sendError(sessionID, jobID, msg string) {
 	log.Printf("[executor] error for session %s: %s", sessionID, msg)
 	e.sessionMgr.Send(sessionID, model.OutputMessage{
 		Type:    "error",
 		Content: msg,
+		JobID:   jobID,
 	})
 	e.sessionMgr.Send(sessionID, model.OutputMessage{
 		Type:    "done",
 		Content: "",
+		JobID:   jobID,
 	})
 }

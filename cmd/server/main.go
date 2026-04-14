@@ -43,7 +43,7 @@ func main() {
 	runHandler := handler.NewRunHandler(pool, sessionMgr)
 	wsHandler := handler.NewWSHandler(sessionMgr)
 	githubHandler := handler.NewGitHubHandler()
-
+	templateHandler := handler.NewTemplateHandler("./templates")
 
 	mux := http.NewServeMux()
 
@@ -52,6 +52,9 @@ func main() {
 
 	// GET /ws?session_id=xxx - Stream build output via WebSocket
 	mux.HandleFunc("/ws", wsHandler.Handle)
+
+	// GET /templates?name=xxx - Get project template structure
+	mux.HandleFunc("/templates", templateHandler.HandleGetTemplate)
 
 	// GitHub proxy endpoints (bypass CORS for Device Flow)
 	mux.HandleFunc("/github/device-code", githubHandler.HandleDeviceCode)

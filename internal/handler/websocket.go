@@ -33,8 +33,10 @@ func NewWSHandler(sessionMgr *session.Manager) *WSHandler {
 //
 // Usage: GET /ws?session_id=abc12345
 func (h *WSHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	// Extract session_id from query parameters
+	// Extract session_id and optional job_id from query parameters
 	sessionID := r.URL.Query().Get("session_id")
+	jobID := r.URL.Query().Get("job_id")
+
 	if sessionID == "" {
 		http.Error(w, `{"error":"session_id query parameter is required"}`, http.StatusBadRequest)
 		return
@@ -47,12 +49,11 @@ func (h *WSHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[websocket] client connected: session=%s", sessionID)
+	log.Printf("[websocket] client connected: session=%s, job=%s", sessionID, jobID)
 
 	// Register this connection with the session manager.
-	// This also flushes any buffered messages that were produced
-	// before the client connected.
-	if !h.sessionMgr.AddConnection(sessionID, conn) {
+	// This also flushes any buffered messages for the specific jobID.
+	if !h.sessionMgr.AddConnection(sessionID, jobID, conn) {
 		log.Printf("[websocket] session not found: %s", sessionID)
 		conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"session not found"}`))
 		conn.Close()

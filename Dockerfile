@@ -21,6 +21,8 @@ WORKDIR /app
 
 # Copy the compiled binary from the builder stage
 COPY --from=builder /app/server .
+# Copy templates for runtime access
+COPY --from=builder /app/templates ./templates
 
 # Create workspace directory
 RUN mkdir -p /app/workspaces
