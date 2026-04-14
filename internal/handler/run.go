@@ -214,8 +214,9 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if entries, err := os.ReadDir(workDir); err == nil {
 		log.Printf("[handler] selectively clearing workspace: %s", workDir)
 		for _, entry := range entries {
-			if entry.Name() == ".config" {
-				continue // Preserve identities and session config
+			// Preserve .config (identities) and target (build cache)
+			if entry.Name() == ".config" || entry.Name() == "target" {
+				continue // Preserve identities and build artifacts
 			}
 			os.RemoveAll(filepath.Join(workDir, entry.Name()))
 		}
