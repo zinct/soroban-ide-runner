@@ -171,12 +171,41 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Limit the total request body size to 10MB
+	r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024)
+
 	// Parse request body
 	var req model.RunRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("[handler] invalid request body: %v", err)
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"invalid request body or file too large"}`, http.StatusBadRequest)
 		return
+	}
+
+	// Validate files: size and extensions
+	for filename, content := range req.Files {
+		// Individual file limit: 1MB
+		if len(content) > 1024*1024 {
+			log.Printf("[handler] file too large rejected: %s (%d bytes)", filename, len(content))
+			http.Error(w, `{"error":"file too large: `+filename+`"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Extension check (secondary defense)
+		ext := strings.ToLower(filepath.Ext(filename))
+		isBlocked := false
+		blockedExts := []string{".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".exe", ".bin"}
+		for _, b := range blockedExts {
+			if ext == b {
+				isBlocked = true
+				break
+			}
+		}
+		if isBlocked {
+			log.Printf("[handler] blocked file type rejected: %s", filename)
+			http.Error(w, `{"error":"file type not allowed: `+filename+`"}`, http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Validate the command
