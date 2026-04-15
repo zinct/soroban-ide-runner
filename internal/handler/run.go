@@ -330,3 +330,33 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		JobID:     jobID,
 	})
 }
+
+// Kill processes POST /kill requests to stop a running job.
+func (h *RunHandler) Kill(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1024) // Small payload expected
+
+	var req model.KillRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.JobID == "" {
+		http.Error(w, `{"error":"job_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("[handler] received kill request for job %s (session %s)", req.JobID, req.SessionID)
+
+	// Send kill signal to the worker pool
+	h.pool.Kill(req.JobID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "job_id": req.JobID})
+}

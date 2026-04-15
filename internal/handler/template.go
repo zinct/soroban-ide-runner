@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/base64"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -100,8 +101,22 @@ func (h *TemplateHandler) scanTemplateDir(path, name, idPath string, contents ma
 				return nil, err
 			}
 
-			// Save to contents map
-			contents[entryID] = string(fileContent)
+			// Save to contents map. If it's a binary file, encode as base64.
+			ext := strings.ToLower(filepath.Ext(entryName))
+			isBinary := false
+			binaryExtensions := []string{".png", ".jpg", ".jpeg", ".gif", ".svg", ".wasm", ".pdf"}
+			for _, bExt := range binaryExtensions {
+				if ext == bExt {
+					isBinary = true
+					break
+				}
+			}
+
+			if isBinary {
+				contents[entryID] = base64.StdEncoding.EncodeToString(fileContent)
+			} else {
+				contents[entryID] = string(fileContent)
+			}
 
 			// Add to tree
 			node.Children = append(node.Children, model.FileTreeNode{

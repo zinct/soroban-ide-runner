@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"log"
 	"sync"
 
@@ -12,18 +13,20 @@ import (
 // It uses a buffered Go channel as a simple, efficient job queue.
 // Concurrency is limited by the number of workers (default: 3).
 type WorkerPool struct {
-	jobs     chan model.Job
-	wg       sync.WaitGroup
-	executor *executor.Executor
-	workers  int
+	jobs       chan model.Job
+	wg         sync.WaitGroup
+	executor   *executor.Executor
+	workers    int
+	activeJobs sync.Map // Map[string]context.CancelFunc (key: JobID)
 }
 
 // NewWorkerPool creates a new worker pool with the specified concurrency limit.
 func NewWorkerPool(workers int, exec *executor.Executor) *WorkerPool {
 	return &WorkerPool{
-		jobs:     make(chan model.Job, 100), // buffered to prevent blocking callers
-		executor: exec,
-		workers:  workers,
+		jobs:       make(chan model.Job, 100), // buffered to prevent blocking callers
+		executor:   exec,
+		workers:    workers,
+		activeJobs: sync.Map{},
 	}
 }
 
@@ -40,7 +43,18 @@ func (wp *WorkerPool) Start() {
 // Enqueue adds a job to the queue. Non-blocking as long as the buffer isn't full.
 func (wp *WorkerPool) Enqueue(job model.Job) {
 	wp.jobs <- job
-	log.Printf("[queue] job enqueued: session=%s", job.SessionID)
+	log.Printf("[queue] job enqueued: session=%s, job=%s", job.SessionID, job.JobID)
+}
+
+// Kill stops a running job by its JobID.
+func (wp *WorkerPool) Kill(jobID string) {
+	if cancel, ok := wp.activeJobs.Load(jobID); ok {
+		log.Printf("[queue] killing job: %s", jobID)
+		cancel.(context.CancelFunc)()
+		wp.activeJobs.Delete(jobID)
+	} else {
+		log.Printf("[queue] kill failed: job %s not found or already finished", jobID)
+	}
 }
 
 // Stop gracefully shuts down the worker pool by closing the channel
@@ -58,9 +72,19 @@ func (wp *WorkerPool) worker(id int) {
 	log.Printf("[worker-%d] started", id)
 
 	for job := range wp.jobs {
-		log.Printf("[worker-%d] processing job: session=%s", id, job.SessionID)
-		wp.executor.Execute(job)
-		log.Printf("[worker-%d] completed job: session=%s", id, job.SessionID)
+		log.Printf("[worker-%d] processing job: session=%s, job=%s", id, job.SessionID, job.JobID)
+
+		// Create a cancellable context for this specific job
+		ctx, cancel := context.WithCancel(context.Background())
+		wp.activeJobs.Store(job.JobID, cancel)
+
+		// Execute the job with the context
+		wp.executor.Execute(ctx, job)
+
+		// Cleanup after job completion
+		cancel()
+		wp.activeJobs.Delete(job.JobID)
+		log.Printf("[worker-%d] completed job: session=%s, job=%s", id, job.SessionID, job.JobID)
 	}
 
 	log.Printf("[worker-%d] stopped", id)

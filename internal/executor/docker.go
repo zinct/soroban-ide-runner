@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -47,8 +48,8 @@ func New(sessionMgr *session.Manager) *Executor {
 
 // Execute runs the user's command inside the runner container for
 // the given job. Output is streamed in real-time via WebSocket.
-// After completion, scans the workspace and sends a fileTreeUpdate.
-func (e *Executor) Execute(job model.Job) {
+// Supports cancellation via the provided context.
+func (e *Executor) Execute(ctx context.Context, job model.Job) {
 	command := job.Command
 	if command == "" {
 		command = "stellar contract build"
@@ -85,7 +86,8 @@ func (e *Executor) Execute(job model.Job) {
 
 	log.Printf("[executor] docker command: docker %v", dockerArgs)
 
-	cmd := exec.Command("docker", dockerArgs...)
+	// Use CommandContext to allow the process to be killed when the context is cancelled
+	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
 
 	// Create pipes for real-time output streaming
 	stdout, err := cmd.StdoutPipe()

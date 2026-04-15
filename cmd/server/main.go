@@ -50,6 +50,9 @@ func main() {
 	// POST /run - Submit files for compilation
 	mux.HandleFunc("/run", runHandler.Handle)
 
+	// POST /kill - Interrupt/Kill a running job
+	mux.HandleFunc("/kill", runHandler.Kill)
+
 	// GET /ws?session_id=xxx - Stream build output via WebSocket
 	mux.HandleFunc("/ws", wsHandler.Handle)
 

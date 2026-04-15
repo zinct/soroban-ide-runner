@@ -15,6 +15,12 @@ type RunResponse struct {
 	JobID     string `json:"job_id"`
 }
 
+// KillRequest represents a payload to stop a running job.
+type KillRequest struct {
+	SessionID string `json:"session_id"`
+	JobID     string `json:"job_id"`
+}
+
 // OutputMessage represents a single output chunk sent via WebSocket.
 // Type can be: "stdout", "stderr", "info", "error", "done", "fileTreeUpdate"
 // JobID tags the message so the frontend can filter by job.
