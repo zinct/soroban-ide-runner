@@ -17,7 +17,7 @@ import (
 
 // allowedPrefixes defines which command prefixes are permitted.
 var allowedPrefixes = []string{
-	"stellar", "soroban", "cargo",
+	"stellar", "soroban", "cargo", "git",
 }
 
 // dangerousPatterns contains shell metacharacters that indicate injection attempts.
