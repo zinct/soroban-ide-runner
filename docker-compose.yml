@@ -17,17 +17,17 @@ services:
       dockerfile: Dockerfile
     container_name: soroban-backend
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:${PORT:-8080}"
     volumes:
       # Mount Docker socket so backend can run `docker exec`
       - /var/run/docker.sock:/var/run/docker.sock
       # Shared workspace volume for project files
       - workspace:/app/workspaces
     environment:
-      - PORT=8080
-      - MAX_WORKERS=2
-      - RUNNER_CONTAINER=soroban-runner
-      - WORKSPACE_DIR=/app/workspaces
+      - PORT=${PORT:-8080}
+      - MAX_WORKERS=${MAX_WORKERS:-3}
+      - RUNNER_CONTAINER=${RUNNER_CONTAINER:-soroban-runner}
+      - WORKSPACE_DIR=${WORKSPACE_DIR:-/app/workspaces}
     deploy:
       resources:
         limits:

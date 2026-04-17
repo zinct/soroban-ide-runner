@@ -1,0 +1,14 @@
+# Environment variables
+.env
+
+# Go
+bin/
+
+# Docker volumes (if any local)
+workspaces/
+target/
+sccache/
+cargo_home/
+
+# OS files
+.DS_Store
