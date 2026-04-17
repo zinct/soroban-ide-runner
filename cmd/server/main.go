@@ -18,15 +18,11 @@ import (
 )
 
 func main() {
-	// Configure structured logging with file/line info
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("🚀 Starting Soroban Studio Backend (Stellar)...")
 
 	// ─── Configuration ───────────────────────────────────────────────
 	port := getEnv("PORT", "8080")
 	maxWorkers := getEnvInt("MAX_WORKERS", 3)
-
-	log.Printf("Configuration: port=%s, max_workers=%d", port, maxWorkers)
 
 	// ─── Initialize Components ───────────────────────────────────────
 	// Session manager: tracks WebSocket connections per session
@@ -84,7 +80,6 @@ func main() {
 
 	// Run server in a goroutine so we can handle shutdown signals
 	go func() {
-		log.Printf("✅ Server listening on :%s", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("❌ Failed to start server: %v", err)
 		}
@@ -95,8 +90,6 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
-
-	log.Printf("⏳ Received signal %v, shutting down...", sig)
 
 	// Give in-flight requests 30 seconds to complete
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

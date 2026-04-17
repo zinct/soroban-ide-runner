@@ -55,11 +55,8 @@ func (e *Executor) Execute(ctx context.Context, job model.Job) {
 		command = "stellar contract build"
 	}
 
-	log.Printf("[executor] executing command for session %s (job %s): %q", job.SessionID, job.JobID, command)
-
 	// Parse the command into individual arguments (safe — no shell involved)
 	cmdArgs := strings.Fields(command)
-	log.Printf("[executor] parsed args: %v", cmdArgs)
 
 	workDir := fmt.Sprintf("/app/workspaces/%s", job.SessionID)
 
@@ -83,8 +80,6 @@ func (e *Executor) Execute(ctx context.Context, job model.Job) {
 		e.containerName,
 	}
 	dockerArgs = append(dockerArgs, cmdArgs...)
-
-	log.Printf("[executor] docker command: docker %v", dockerArgs)
 
 	// Use CommandContext to allow the process to be killed when the context is cancelled
 	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
@@ -158,7 +153,6 @@ func (e *Executor) Execute(ctx context.Context, job model.Job) {
 		// POST-COMMAND HOOKS:
 		// [DEPRECATED] Backend-to-Frontend sync is disabled as per user architecture.
 		// The frontend is now the sole source of truth.
-		log.Printf("[executor] command succeeded for session %s (job %s)", job.SessionID, job.JobID)
 
 	// Signal that execution is complete
 	e.sessionMgr.Send(job.SessionID, model.OutputMessage{

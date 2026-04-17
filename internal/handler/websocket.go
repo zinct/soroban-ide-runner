@@ -49,12 +49,9 @@ func (h *WSHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[websocket] client connected: session=%s, job=%s", sessionID, jobID)
-
 	// Register this connection with the session manager.
 	// This also flushes any buffered messages for the specific jobID.
 	if !h.sessionMgr.AddConnection(sessionID, jobID, conn) {
-		log.Printf("[websocket] session not found: %s", sessionID)
 		conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","content":"session not found"}`))
 		conn.Close()
 		return
@@ -67,7 +64,6 @@ func (h *WSHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, _, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("[websocket] client disconnected: session=%s, reason=%v", sessionID, err)
 			break
 		}
 	}

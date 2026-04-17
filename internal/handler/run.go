@@ -105,7 +105,6 @@ func sanitizeCommand(command string) string {
 		}
 		if !hasFlag {
 			command = command + " --ignore-scripts"
-			log.Printf("[handler] npm safety: appended --ignore-scripts")
 		}
 	}
 
@@ -118,7 +117,6 @@ func (h *RunHandler) getOrCreateSessionID(w http.ResponseWriter, r *http.Request
 	// 1. Check X-Session-ID header (sent by frontend via localStorage)
 	//    This is the primary method for cross-origin deployments (e.g., Vercel + Railway)
 	if headerID := r.Header.Get("X-Session-ID"); headerID != "" {
-		log.Printf("[handler] using session from X-Session-ID header: %s", headerID)
 		return headerID
 	}
 
@@ -127,10 +125,8 @@ func (h *RunHandler) getOrCreateSessionID(w http.ResponseWriter, r *http.Request
 	if err == nil && cookie.Value != "" {
 		sessionPath := filepath.Join(h.workspaceDir, cookie.Value)
 		if _, err := os.Stat(sessionPath); err == nil {
-			log.Printf("[handler] using existing session from cookie: %s", cookie.Value)
 			return cookie.Value
 		}
-		log.Printf("[handler] session directory not found, creating new session")
 	}
 
 	// 3. Last resort: generate a new UUID
@@ -145,7 +141,6 @@ func (h *RunHandler) getOrCreateSessionID(w http.ResponseWriter, r *http.Request
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	log.Printf("[handler] created new persistent session: %s", sessionID)
 	return sessionID
 }
 
@@ -224,8 +219,6 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Sanitize: auto-append safety flags
 	command = sanitizeCommand(command)
 
-	log.Printf("[handler] received command: %q", command)
-
 	// Files are optional if a command is provided (e.g. for 'stellar contract init')
 	// But we still create the workspace directory below.
 
@@ -270,7 +263,6 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			if len(subDirs) == 1 {
 				potentialDir := filepath.Join(jobWorkDir, subDirs[0])
 				if _, err := os.Stat(filepath.Join(potentialDir, "Cargo.toml")); err == nil {
-					log.Printf("[handler] smart workdir: diving into %s", subDirs[0])
 					jobWorkDir = potentialDir
 				}
 			}
@@ -285,7 +277,6 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	for filename, content := range req.Files {
 		filePath := filepath.Join(sessionBaseDir, filename)
 		dir := filepath.Dir(filePath)
-// ... same as before
 		// Create parent directories (e.g., src/)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			log.Printf("[handler] failed to create directory %s: %v", dir, err)
@@ -300,8 +291,6 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	log.Printf("[handler] workspace ready: session=%s, workdir=%s, files=%d, command=%q", sessionID, jobWorkDir, len(req.Files), command)
 
 	// Ensure session exists for WebSocket tracking.
 	// Note: We do NOT clear the buffer here. With jobId-based filtering,
@@ -350,8 +339,6 @@ func (h *RunHandler) Kill(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"job_id is required"}`, http.StatusBadRequest)
 		return
 	}
-
-	log.Printf("[handler] received kill request for job %s (session %s)", req.JobID, req.SessionID)
 
 	// Send kill signal to the worker pool
 	h.pool.Kill(req.JobID)

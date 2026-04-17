@@ -37,23 +37,18 @@ func (wp *WorkerPool) Start() {
 		wp.wg.Add(1)
 		go wp.worker(i)
 	}
-	log.Printf("[queue] started %d workers", wp.workers)
 }
 
 // Enqueue adds a job to the queue. Non-blocking as long as the buffer isn't full.
 func (wp *WorkerPool) Enqueue(job model.Job) {
 	wp.jobs <- job
-	log.Printf("[queue] job enqueued: session=%s, job=%s", job.SessionID, job.JobID)
 }
 
 // Kill stops a running job by its JobID.
 func (wp *WorkerPool) Kill(jobID string) {
 	if cancel, ok := wp.activeJobs.Load(jobID); ok {
-		log.Printf("[queue] killing job: %s", jobID)
 		cancel.(context.CancelFunc)()
 		wp.activeJobs.Delete(jobID)
-	} else {
-		log.Printf("[queue] kill failed: job %s not found or already finished", jobID)
 	}
 }
 
@@ -62,18 +57,14 @@ func (wp *WorkerPool) Kill(jobID string) {
 func (wp *WorkerPool) Stop() {
 	close(wp.jobs)
 	wp.wg.Wait()
-	log.Println("[queue] all workers stopped")
 }
 
 // worker is the main loop for each worker goroutine.
 // It processes jobs until the channel is closed.
 func (wp *WorkerPool) worker(id int) {
 	defer wp.wg.Done()
-	log.Printf("[worker-%d] started", id)
 
 	for job := range wp.jobs {
-		log.Printf("[worker-%d] processing job: session=%s, job=%s", id, job.SessionID, job.JobID)
-
 		// Create a cancellable context for this specific job
 		ctx, cancel := context.WithCancel(context.Background())
 		wp.activeJobs.Store(job.JobID, cancel)
@@ -84,8 +75,5 @@ func (wp *WorkerPool) worker(id int) {
 		// Cleanup after job completion
 		cancel()
 		wp.activeJobs.Delete(job.JobID)
-		log.Printf("[worker-%d] completed job: session=%s, job=%s", id, job.SessionID, job.JobID)
 	}
-
-	log.Printf("[worker-%d] stopped", id)
 }
