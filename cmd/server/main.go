@@ -93,6 +93,17 @@ func main() {
 		w.Write([]byte(`{"status":"ok","service":"soroban-studio-backend"}`))
 	})
 
+	// ─── Auto-init default wallet on startup ────────────────────────
+	go func() {
+		// Wait for runner container to be ready
+		time.Sleep(3 * time.Second)
+		if _, err := walletHandler.InitDefault(); err != nil {
+			log.Printf("[startup] wallet init failed: %v", err)
+		} else {
+			log.Printf("[startup] default wallet ready")
+		}
+	}()
+
 	// ─── Start Server ────────────────────────────────────────────────
 	server := &http.Server{
 		Addr:         ":" + port,

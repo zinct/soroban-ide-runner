@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -31,6 +32,18 @@ func (h *WalletHandler) runInContainer(args ...string) (string, error) {
 	dockerArgs := append([]string{"exec", "--env", "HOME=/root", h.containerName}, args...)
 	out, err := exec.Command("docker", dockerArgs...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
+}
+
+// InitDefault creates and funds the default wallet. Returns the status.
+func (h *WalletHandler) InitDefault() (model.WalletStatusResponse, error) {
+	output, err := h.runInContainer("stellar", "keys", "generate", defaultWalletName, "--network", "testnet", "--fund")
+	alreadyExists := strings.Contains(output, "already exists") ||
+		strings.Contains(output, "already generated") ||
+		strings.Contains(output, "An identity with the name")
+	if err != nil && !alreadyExists {
+		return model.WalletStatusResponse{}, fmt.Errorf("%s", output)
+	}
+	return h.fetchStatus(), nil
 }
 
 // HandleInit handles POST /wallet/default/init
