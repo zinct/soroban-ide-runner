@@ -16,7 +16,4 @@ jobs:
           username: soroban
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 2222
-          script: |
-            echo "Remote User: ${{ secrets.REMOTE_USER }}"
-            echo "SSH Key: ${{ secrets.SSH_PRIVATE_KEY }}"
-            echo "trigger deploy"
+          script: echo "trigger deploy"
