@@ -36,6 +36,7 @@ type Job struct {
 	JobID     string
 	WorkDir   string
 	Command   string // The validated command string to execute
+	Port      int    // Assigned port for dev servers
 }
 
 // FileTreeNode represents a file or folder in the scanned workspace.

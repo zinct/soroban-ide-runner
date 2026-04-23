@@ -13,6 +13,7 @@ import (
 	"soroban-studio-backend/internal/executor"
 	"soroban-studio-backend/internal/handler"
 	"soroban-studio-backend/internal/middleware"
+	"soroban-studio-backend/internal/port"
 	"soroban-studio-backend/internal/queue"
 	"soroban-studio-backend/internal/session"
 )
@@ -21,8 +22,9 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	// ─── Configuration ───────────────────────────────────────────────
-	port := getEnv("PORT", "8080")
+	srvPort := getEnv("PORT", "8080")
 	maxWorkers := getEnvInt("MAX_WORKERS", 3)
+	runnerHost := getEnv("RUNNER_CONTAINER", "soroban-runner")
 
 	// ─── Initialize Components ───────────────────────────────────────
 	// Session manager: tracks WebSocket connections per session
@@ -31,13 +33,17 @@ func main() {
 	// Executor: runs docker exec commands inside the Stellar runner
 	exec := executor.New(sessionMgr)
 
+	// Port manager: handles pool of 100 ports for dev servers
+	portMgr := port.NewManager(3000, 100)
+
 	// Worker pool: processes build jobs with limited concurrency
 	pool := queue.NewWorkerPool(maxWorkers, exec)
 	pool.Start()
 
 	// ─── Setup HTTP Handlers ─────────────────────────────────────────
-	runHandler := handler.NewRunHandler(pool, sessionMgr)
+	runHandler := handler.NewRunHandler(pool, sessionMgr, portMgr)
 	wsHandler := handler.NewWSHandler(sessionMgr)
+	previewHandler := handler.NewPreviewHandler(portMgr, runnerHost)
 	githubHandler := handler.NewGitHubHandler()
 	templateHandler := handler.NewTemplateHandler("./templates")
 
@@ -51,6 +57,9 @@ func main() {
 
 	// GET /ws?session_id=xxx - Stream build output via WebSocket
 	mux.HandleFunc("/ws", wsHandler.Handle)
+
+	// GET /preview/{sessionID}/{path...} - Proxy to session's dev server
+	mux.HandleFunc("/preview/{sessionID}/{path...}", previewHandler.Handle)
 
 	// GET /templates?name=xxx - Get project template structure
 	mux.HandleFunc("/templates", templateHandler.HandleGetTemplate)
@@ -71,7 +80,7 @@ func main() {
 
 	// ─── Start Server ────────────────────────────────────────────────
 	server := &http.Server{
-		Addr:         ":" + port,
+		Addr:         ":" + srvPort,
 		Handler:      middleware.CORS(mux),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 0, // No timeout for WebSocket connections

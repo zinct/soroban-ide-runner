@@ -77,8 +77,19 @@ func (e *Executor) Execute(ctx context.Context, job model.Job) {
 		"--env", "RUSTC_WRAPPER=sccache",
 		"--env", "SCCACHE_DIR=/app/sccache",
 		"--env", "CARGO_HOME=/app/cargo",
-		e.containerName,
 	}
+
+	// Inject PORT if assigned (for dev servers)
+	if job.Port > 0 {
+		dockerArgs = append(dockerArgs, "--env", fmt.Sprintf("PORT=%d", job.Port))
+		dockerArgs = append(dockerArgs, "--env", fmt.Sprintf("VITE_PORT=%d", job.Port))
+		// Ensure Vite/Vite-based tools listen on all interfaces so the proxy can reach them
+		dockerArgs = append(dockerArgs, "--env", "VITE_HOST=0.0.0.0")
+		// Inform Vite about its base path when behind the preview proxy
+		dockerArgs = append(dockerArgs, "--env", fmt.Sprintf("VITE_BASE_URL=/preview/%s/", job.SessionID))
+	}
+
+	dockerArgs = append(dockerArgs, e.containerName)
 	dockerArgs = append(dockerArgs, cmdArgs...)
 
 	// Use CommandContext to allow the process to be killed when the context is cancelled
@@ -138,13 +149,25 @@ func (e *Executor) Execute(ctx context.Context, job model.Job) {
 	// Wait for all output to be read before calling cmd.Wait()
 	wg.Wait()
 
-	// Wait for the process to exit and check the result
-	if err := cmd.Wait(); err != nil {
-		e.sessionMgr.Send(job.SessionID, model.OutputMessage{
-			Type:    "error",
-			Content: fmt.Sprintf("Command failed: %v", err),
-			JobID:   job.JobID,
-		})
+	// Wait for the process to exit
+	err = cmd.Wait()
+
+	// ─── POST-COMMAND CLEANUP ────────────────────────────────────
+	// Especially importante for long-running processes like 'npm run dev'
+	// When the context is cancelled (Kill signal), we must ensure all 
+	// children inside the container are also terminated.
+	e.cleanup(job.SessionID)
+
+	// Check the result
+	if err != nil {
+		// Only send error if it wasn't a manual cancellation
+		if ctx.Err() == nil {
+			e.sessionMgr.Send(job.SessionID, model.OutputMessage{
+				Type:    "error",
+				Content: fmt.Sprintf("Command failed: %v", err),
+				JobID:   job.JobID,
+			})
+		}
 	}
 
 	// NOTE: Workspace is NOT cleaned up here.
@@ -236,4 +259,22 @@ func (e *Executor) sendError(sessionID, jobID, msg string) {
 		Content: "",
 		JobID:   jobID,
 	})
+}
+
+// cleanup ensures that no orphaned processes remain in the session's workspace inside the container.
+// It uses pkill -f to target any process whose command line contains the session's absolute path.
+func (e *Executor) cleanup(sessionID string) {
+	// Root workspace path inside the container: /app/workspaces/:sessionID
+	workspacePath := filepath.Join(e.workspaceDir, sessionID)
+
+	// Command: pkill -f /app/workspaces/:sessionID
+	// -f matches the full command line
+	// This will kill node, vite, cargo, etc. started for this session.
+	cleanupCmd := exec.Command("docker", "exec", e.containerName, "pkill", "-f", workspacePath)
+	if err := cleanupCmd.Run(); err != nil {
+		// pkill returns 1 if no processes were matched, which is fine
+		log.Printf("[executor] cleanup for %s (no procs killed or err): %v", sessionID, err)
+	} else {
+		log.Printf("[executor] cleanup success for %s", sessionID)
+	}
 }

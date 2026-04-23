@@ -1,13 +1,10 @@
-# ─── Soroban Runner Container ─────────────────────────────────────
+# ─── Soroban & Frontend Runner Container ──────────────────────────
 # This container stays alive and receives `docker exec` commands
-# from the backend to compile Soroban contracts.
-#
-# NOTE: First build will take 15-20 minutes as it compiles stellar-cli
-# from source. Subsequent builds will be cached by Docker.
+# from the backend to compile Soroban contracts and run Node.js apps.
 
 FROM rust:1.94-slim-bookworm
 
-# Install dependency dasar (tetap dibutuhkan untuk workflow kamu)
+# Install basic dependencies + Node.js setup
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
@@ -18,9 +15,14 @@ RUN apt-get update && apt-get install -y \
     libusb-1.0-0-dev \
     libhidapi-dev \
     libdbus-1-dev \
+    gnupg \
+    procps \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && corepack enable && corepack prepare pnpm@latest --activate \
     && rm -rf /var/lib/apt/lists/*
 
-# Add WASM target (ini tetap penting buat Soroban contract)
+# Add WASM target for Soroban
 RUN rustup target add wasm32v1-none
 
 # ✅ Install stellar-cli pre-built binary
@@ -56,18 +58,34 @@ RUN ARCH=$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/sccache && \
     rm -rf /tmp/sccache.tar.gz /tmp/sccache-v0.10.0-${SCCACHE_ARCH}
 
-# Set sccache and cargo environment variables
+# Set environment variables for caching and ports
 ENV RUSTC_WRAPPER=sccache
 ENV SCCACHE_DIR=/app/sccache
 ENV SCCACHE_BASE_DIR=/app/workspaces
 ENV CARGO_HOME=/app/cargo
-ENV CARGO_HOME=/app/cargo
 ENV SCCACHE_IDLE_TIMEOUT=0
 ENV SCCACHE_SERVER_UDS=/tmp/sccache.socket
 
+# PNPM & Node Configuration
+ENV PNPM_HOME=/usr/local/share/pnpm
+ENV PATH="$PNPM_HOME:$PATH"
+RUN pnpm config set store-dir /app/pnpm-store
+
 # Workspace and Cache
-RUN mkdir -p /app/workspaces /app/sccache /app/cargo && \
-    chmod 777 /app/sccache /app/cargo
+RUN mkdir -p /app/workspaces /app/sccache /app/cargo /app/pnpm-store && \
+    chmod 777 /app/sccache /app/cargo /app/pnpm-store
+
+# Workspace and Cache
+RUN mkdir -p /app/workspaces /app/sccache /app/cargo /app/pnpm-store && \
+    chmod 777 /app/sccache /app/cargo /app/pnpm-store
+
+# ─── Shared Node Modules (Hoisting) ───
+# We pre-install common dependencies at the parent level (/app).
+# Node.js resolution will walk up from /app/workspaces/:session/:name 
+# and find these in /app/node_modules.
+WORKDIR /app
+RUN pnpm add react react-dom vite @vitejs/plugin-react tailwindcss postcss autoprefixer lucide-react @stellar/stellar-sdk
+
 WORKDIR /app/workspaces
 
 # Start sccache server and keep container alive

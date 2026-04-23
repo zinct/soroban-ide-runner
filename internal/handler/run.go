@@ -9,15 +9,15 @@ import (
 	"strings"
 
 	"soroban-studio-backend/internal/model"
+	"soroban-studio-backend/internal/port"
 	"soroban-studio-backend/internal/queue"
 	"soroban-studio-backend/internal/session"
 
 	"github.com/google/uuid"
 )
 
-// allowedPrefixes defines which command prefixes are permitted.
 var allowedPrefixes = []string{
-	"stellar", "soroban", "cargo", "git",
+	"stellar", "cargo", "git", "npm", "pnpm", "yarn", "node",
 }
 
 // dangerousPatterns contains shell metacharacters that indicate injection attempts.
@@ -28,11 +28,12 @@ var dangerousPatterns = []string{"&&", "||", ";", "|", ">", "<", "$", "`", "(", 
 type RunHandler struct {
 	pool         *queue.WorkerPool
 	sessionMgr   *session.Manager
+	portMgr      *port.Manager
 	workspaceDir string
 }
 
 // NewRunHandler creates a new RunHandler with the given dependencies.
-func NewRunHandler(pool *queue.WorkerPool, sessionMgr *session.Manager) *RunHandler {
+func NewRunHandler(pool *queue.WorkerPool, sessionMgr *session.Manager, portMgr *port.Manager) *RunHandler {
 	workspaceDir := os.Getenv("WORKSPACE_DIR")
 	if workspaceDir == "" {
 		workspaceDir = "/app/workspaces"
@@ -41,6 +42,7 @@ func NewRunHandler(pool *queue.WorkerPool, sessionMgr *session.Manager) *RunHand
 	return &RunHandler{
 		pool:         pool,
 		sessionMgr:   sessionMgr,
+		portMgr:      portMgr,
 		workspaceDir: workspaceDir,
 	}
 }
@@ -247,7 +249,7 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Smart Workdir Detection: If we are in the root and there's no Cargo.toml, 
+	// Smart Workdir Detection: If we are in the root and there's no Cargo.toml,
 	// but there's a unique subdirectory with a Cargo.toml (like after 'init hello-world'),
 	// automatically use that subdirectory as the execution context.
 	if _, err := os.Stat(filepath.Join(jobWorkDir, "Cargo.toml")); os.IsNotExist(err) {
@@ -262,7 +264,9 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			// If exactly one project folder exists, dive into it
 			if len(subDirs) == 1 {
 				potentialDir := filepath.Join(jobWorkDir, subDirs[0])
-				if _, err := os.Stat(filepath.Join(potentialDir, "Cargo.toml")); err == nil {
+				_, errCargo := os.Stat(filepath.Join(potentialDir, "Cargo.toml"))
+				_, errPackage := os.Stat(filepath.Join(potentialDir, "package.json"))
+				if errCargo == nil || errPackage == nil {
 					jobWorkDir = potentialDir
 				}
 			}
@@ -303,12 +307,19 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// output belonging to the command it triggered (prevents init/build mixing).
 	jobID := uuid.New().String()
 
+	// Detect dev server commands and assign a port
+	assignedPort := 0
+	if strings.Contains(command, "run dev") || strings.Contains(command, "vite") {
+		assignedPort = h.portMgr.GetPort(sessionID)
+	}
+
 	// Enqueue the job with the user's command
 	h.pool.Enqueue(model.Job{
 		SessionID: sessionID,
 		JobID:     jobID,
 		WorkDir:   jobWorkDir,
 		Command:   command,
+		Port:      assignedPort,
 	})
 
 	// Return the session ID and job ID to the client
