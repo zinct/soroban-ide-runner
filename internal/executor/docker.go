@@ -55,8 +55,8 @@ func (e *Executor) Execute(ctx context.Context, job model.Job) {
 		command = "stellar contract build"
 	}
 
-	// Parse the command into individual arguments (safe — no shell involved)
-	cmdArgs := strings.Fields(command)
+	// Parse command respecting quoted strings (e.g. --arg "hello world")
+	cmdArgs := splitArgs(command)
 
 	workDir := fmt.Sprintf("/app/workspaces/%s", job.SessionID)
 
@@ -233,4 +233,28 @@ func (e *Executor) sendError(sessionID, jobID, msg string) {
 		Content: "",
 		JobID:   jobID,
 	})
+}
+
+// splitArgs splits a command string into arguments, respecting double-quoted strings.
+func splitArgs(s string) []string {
+	var args []string
+	var cur []byte
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '"' {
+			inQuote = !inQuote
+		} else if c == ' ' && !inQuote {
+			if len(cur) > 0 {
+				args = append(args, string(cur))
+				cur = cur[:0]
+			}
+		} else {
+			cur = append(cur, c)
+		}
+	}
+	if len(cur) > 0 {
+		args = append(args, string(cur))
+	}
+	return args
 }

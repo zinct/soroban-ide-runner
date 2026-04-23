@@ -21,7 +21,7 @@ var allowedPrefixes = []string{
 }
 
 // dangerousPatterns contains shell metacharacters that indicate injection attempts.
-var dangerousPatterns = []string{"&&", "||", ";", "|", ">", "<", "$", "`", "(", ")", "{", "}"}
+var dangerousPatterns = []string{"&&", "||", ";", "|", ">", "<", "$", "(", ")", "{", "}"}
 
 // RunHandler handles the POST /run endpoint.
 // It receives project files + a command, writes them to a workspace, and enqueues a job.
@@ -53,10 +53,20 @@ func validateCommand(command string) string {
 		return "no command provided"
 	}
 
-	// Check for dangerous shell metacharacters
-	for _, pattern := range dangerousPatterns {
-		if strings.Contains(trimmed, pattern) {
-			return "syntax error near unexpected token '" + pattern + "'"
+	// Check for dangerous shell metacharacters outside of quoted strings
+	inQuote := false
+	for i := 0; i < len(trimmed); i++ {
+		if trimmed[i] == '"' {
+			inQuote = !inQuote
+			continue
+		}
+		if inQuote {
+			continue
+		}
+		for _, pattern := range dangerousPatterns {
+			if strings.HasPrefix(trimmed[i:], pattern) {
+				return "syntax error near unexpected token '" + pattern + "'"
+			}
 		}
 	}
 
