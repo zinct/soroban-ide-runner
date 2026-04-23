@@ -53,6 +53,7 @@ services:
       - sccache:/app/sccache
       # Global cargo home volume
       - cargo_home:/app/cargo
+      - stellar_config:/root/.config/stellar
     # Keep container alive to receive `docker exec` commands
     command: ["sh", "-c", "sccache --start-server && tail -f /dev/null"]
     deploy:
@@ -68,3 +69,4 @@ volumes:
   target_cache:
   sccache:
   cargo_home:
+  stellar_config:

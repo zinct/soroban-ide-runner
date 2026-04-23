@@ -60,12 +60,9 @@ func (e *Executor) Execute(ctx context.Context, job model.Job) {
 
 	workDir := fmt.Sprintf("/app/workspaces/%s", job.SessionID)
 
-	// Build the docker exec argument list.
-	// Each session runs in its own workspace — no shared symlinks, no race conditions.
-	// Caching still works because:
-	//   - CARGO_TARGET_DIR=/app/target (global, set in Dockerfile)
-	//   - sccache caches compiled crates globally
-	homeEnv := fmt.Sprintf("HOME=%s", workDir)
+	// Keep HOME=/root so stellar CLI can find identity keys in /root/.config/stellar/
+	// Use CARGO_HOME separately for per-session cargo isolation
+	homeEnv := "HOME=/root"
 	targetEnv := "CARGO_TARGET_DIR=/app/target"
 	
 	// Explicitly pass cache-related env vars to ensure sccache is active

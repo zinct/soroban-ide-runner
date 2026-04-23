@@ -17,6 +17,15 @@ import (
 	"soroban-studio-backend/internal/session"
 )
 
+// readFile reads a file and returns its content as a string (empty string on error).
+func readFile(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
@@ -40,6 +49,11 @@ func main() {
 	wsHandler := handler.NewWSHandler(sessionMgr)
 	githubHandler := handler.NewGitHubHandler()
 	templateHandler := handler.NewTemplateHandler("./templates")
+	walletHandler := handler.NewWalletHandler()
+	interfaceHandler := handler.NewInterfaceHandler()
+	hwReadme := readFile("./templates/hello-world/README.md")
+	wsReadme := readFile("./templates/stellar-workshop/README.md")
+	validateHandler := handler.NewValidateHandler(hwReadme, wsReadme)
 
 	mux := http.NewServeMux()
 
@@ -61,6 +75,16 @@ func main() {
 	mux.HandleFunc("/github/repos", githubHandler.HandleUserRepos)
 	mux.HandleFunc("/github/api/", githubHandler.HandleProxy)
 
+	// Wallet endpoints
+	mux.HandleFunc("/wallet/default/init", walletHandler.HandleInit)
+	mux.HandleFunc("/wallet/default/status", walletHandler.HandleStatus)
+	mux.HandleFunc("/wallet/freighter/register", walletHandler.HandleRegisterFreighter)
+
+	// Contract interface parser
+	mux.HandleFunc("/contract/interface", interfaceHandler.Handle)
+
+	// Project validation
+	mux.HandleFunc("/validate/project", validateHandler.Handle)
 
 	// GET /health - Health check endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +92,17 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok","service":"soroban-studio-backend"}`))
 	})
+
+	// ─── Auto-init default wallet on startup ────────────────────────
+	go func() {
+		// Wait for runner container to be ready
+		time.Sleep(3 * time.Second)
+		if _, err := walletHandler.InitDefault(); err != nil {
+			log.Printf("[startup] wallet init failed: %v", err)
+		} else {
+			log.Printf("[startup] default wallet ready")
+		}
+	}()
 
 	// ─── Start Server ────────────────────────────────────────────────
 	server := &http.Server{
