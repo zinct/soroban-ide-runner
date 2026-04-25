@@ -27,12 +27,39 @@ func (h *InterfaceHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build the path prefix used to scope parsing to a single contract.
+	// Empty contract_path means "scan every lib.rs" — the legacy behavior
+	// preserved so older clients keep working. Anything else restricts to
+	// files inside <contract_path>/src/ to avoid mixing pub fns from sibling
+	// crates (which produces invoke commands that target the wrong contract).
+	prefix := ""
+	if req.ContractPath != "" {
+		prefix = strings.TrimSuffix(req.ContractPath, "/") + "/src/"
+	}
+
 	var fns []model.ContractFn
 	for path, content := range req.Files {
-		if strings.HasSuffix(path, "lib.rs") {
-			fns = append(fns, parseContractFns(content)...)
+		if !strings.HasSuffix(path, "lib.rs") {
+			continue
 		}
+		if prefix != "" && !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		fns = append(fns, parseContractFns(content)...)
 	}
+	// Dedupe by function name. A contract should never declare the same pub
+	// fn twice, but parsing inline tests/mods can occasionally surface dupes.
+	// Keep the first occurrence so React keys stay unique downstream.
+	seen := make(map[string]struct{}, len(fns))
+	deduped := fns[:0]
+	for _, fn := range fns {
+		if _, ok := seen[fn.Name]; ok {
+			continue
+		}
+		seen[fn.Name] = struct{}{}
+		deduped = append(deduped, fn)
+	}
+	fns = deduped
 	if fns == nil {
 		fns = []model.ContractFn{}
 	}

@@ -60,14 +60,14 @@ RUN ARCH=$(dpkg --print-architecture) && \
 ENV RUSTC_WRAPPER=sccache
 ENV SCCACHE_DIR=/app/sccache
 ENV SCCACHE_BASE_DIR=/app/workspaces
-ENV CARGO_HOME=/app/cargo
-ENV CARGO_HOME=/app/cargo
 ENV SCCACHE_IDLE_TIMEOUT=0
 ENV SCCACHE_SERVER_UDS=/tmp/sccache.socket
+ENV CARGO_HOME=/app/cargo
+ENV CARGO_TARGET_DIR=/app/target
 
 # Workspace and Cache
-RUN mkdir -p /app/workspaces /app/sccache /app/cargo && \
-    chmod 777 /app/sccache /app/cargo
+RUN mkdir -p /app/workspaces /app/sccache /app/cargo /app/target && \
+    chmod 777 /app/sccache /app/cargo /app/target
 WORKDIR /app/workspaces
 
 # Start sccache server and keep container alive
