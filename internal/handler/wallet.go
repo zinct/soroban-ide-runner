@@ -91,10 +91,20 @@ func (h *WalletHandler) HandleRegisterFreighter(w http.ResponseWriter, r *http.R
 		http.Error(w, `{"error":"address required"}`, http.StatusBadRequest)
 		return
 	}
-	// Remove existing entry first (ignore error), then add
+	// Remove existing entry first (ignore error), then add. The remove is a
+	// best-effort idempotency guard; the add is the source of truth.
 	h.runInContainer("stellar", "keys", "remove", "freighter-wallet")
 	out, err := h.runInContainer("stellar", "keys", "add", "freighter-wallet", "--public-key", req.Address)
-	log.Printf("[wallet] register freighter output: %q err: %v", out, err)
+	// "already exists" is a benign race — a parallel client (or a React
+	// StrictMode double-call) can win the add between our remove and add.
+	// In that case the alias IS registered with the right public key, so
+	// we treat it as success and downgrade the log to an info line so it
+	// doesn't look like a real failure when scanning logs.
+	if err != nil && strings.Contains(out, "already") {
+		log.Printf("[wallet] register freighter: alias already present (idempotent), ok")
+	} else {
+		log.Printf("[wallet] register freighter output: %q err: %v", out, err)
+	}
 	if err != nil && !strings.Contains(out, "already") {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)

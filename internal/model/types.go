@@ -76,8 +76,14 @@ type FnParam struct {
 }
 
 // InterfaceRequest is the body for POST /contract/interface.
+//
+// ContractPath optionally narrows parsing to a single contract crate, e.g.
+// "learning/hello-world". When provided, only lib.rs files under
+// <contractPath>/src/ are parsed; otherwise the handler falls back to
+// scanning every lib.rs in Files (legacy behavior).
 type InterfaceRequest struct {
-	Files map[string]string `json:"files"` // relative path → content
+	Files        map[string]string `json:"files"`         // relative path → content
+	ContractPath string            `json:"contract_path"` // optional crate folder to scope parsing to
 }
 
 // InterfaceResponse is returned by POST /contract/interface.
