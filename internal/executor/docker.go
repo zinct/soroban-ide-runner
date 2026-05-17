@@ -60,9 +60,9 @@ func (e *Executor) Execute(ctx context.Context, job model.Job) {
 
 	workDir := fmt.Sprintf("/app/workspaces/%s", job.SessionID)
 
-	// Keep HOME=/root so stellar CLI can find identity keys in /root/.config/stellar/
+	// Set HOME to the session's workspace so identities/keys are isolated per session
 	// Use CARGO_HOME separately for per-session cargo isolation
-	homeEnv := "HOME=/root"
+	homeEnv := fmt.Sprintf("HOME=%s", workDir)
 	targetEnv := "CARGO_TARGET_DIR=/app/target"
 	
 	// Explicitly pass cache-related env vars to ensure sccache is active
