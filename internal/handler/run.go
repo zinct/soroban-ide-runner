@@ -279,9 +279,16 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// We NO LONGER clear the workspace. With persistent volumes, we only
+	// We NO LONGER clear the entire workspace. With persistent volumes, we only
 	// add or update the files explicitly provided by the frontend.
 	// This allows lazy loading to work: the backend keeps whatever is on disk.
+	//
+	// However, we DO sync the contracts/ directory: any subdirectory under
+	// contracts/ that is NOT referenced in the incoming files is stale
+	// (e.g. from a rename or delete) and must be removed. Otherwise Cargo
+	// discovers the leftover Cargo.toml and tries to build it, causing
+	// "two packages named X" errors.
+	syncContractsDir(sessionBaseDir, req.Files)
 
 	// Write files (overwrite existing ones)
 	for filename, content := range req.Files {
@@ -328,6 +335,45 @@ func (h *RunHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		SessionID: sessionID,
 		JobID:     jobID,
 	})
+}
+
+// syncContractsDir removes subdirectories under contracts/ that are not
+// referenced by any file in the incoming payload. This handles renames and
+// deletes: the frontend always sends the full file set, so any contract
+// directory missing from that set is stale.
+func syncContractsDir(sessionBaseDir string, files map[string]string) {
+	contractsDir := filepath.Join(sessionBaseDir, "contracts")
+	entries, err := os.ReadDir(contractsDir)
+	if err != nil {
+		return // contracts/ doesn't exist yet — nothing to sync
+	}
+
+	// Collect contract directory names referenced in the incoming files.
+	// File paths look like "contracts/<name>/Cargo.toml", "contracts/<name>/src/lib.rs", etc.
+	referenced := make(map[string]bool)
+	for filename := range files {
+		if strings.HasPrefix(filename, "contracts/") {
+			parts := strings.SplitN(strings.TrimPrefix(filename, "contracts/"), "/", 2)
+			if len(parts) >= 1 && parts[0] != "" {
+				referenced[parts[0]] = true
+			}
+		}
+	}
+
+	// If no contract files were sent, don't delete anything — the command
+	// might not be contract-related (e.g. a simple "stellar --version").
+	if len(referenced) == 0 {
+		return
+	}
+
+	// Remove unreferenced contract subdirectories
+	for _, entry := range entries {
+		if entry.IsDir() && !referenced[entry.Name()] {
+			stale := filepath.Join(contractsDir, entry.Name())
+			log.Printf("[handler] removing stale contract directory: %s", stale)
+			os.RemoveAll(stale)
+		}
+	}
 }
 
 // Kill processes POST /kill requests to stop a running job.
